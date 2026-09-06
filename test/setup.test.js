@@ -67,3 +67,45 @@ test('unreadable or empty settings are treated as no status line, not as an erro
 test('an inner containing a single quote stays one shell argument', () => {
   assert.strictEqual(shellQuote("it's here"), "'it'\\''s here'");
 });
+
+test('the generated command never carries a Windows separator', () => {
+  // Claude Code runs the command through Git Bash on Windows, which consumes
+  // unquoted backslashes as escapes, so a native path silently fails to resolve.
+  const onWindows = planSetup({
+    settingsText: '{}',
+    scriptPath: 'C:\\Users\\lucas\\.claude\\claude-usage-statusline.sh',
+    homeDir: 'C:\\Users\\lucas',
+  });
+
+  assert.strictEqual(onWindows.command, '~/.claude/claude-usage-statusline.sh');
+  assert.ok(!onWindows.command.includes('\\'));
+});
+
+test('the home directory collapses to ~ so one command works on every platform', () => {
+  const onMac = planSetup({
+    settingsText: '{}',
+    scriptPath: '/Users/lucas/.claude/claude-usage-statusline.sh',
+    homeDir: '/Users/lucas',
+  });
+  const outsideHome = planSetup({
+    settingsText: '{}',
+    scriptPath: '/opt/claude-usage-statusline.sh',
+    homeDir: '/Users/lucas',
+  });
+
+  assert.strictEqual(onMac.command, '~/.claude/claude-usage-statusline.sh');
+  assert.strictEqual(outsideHome.command, '/opt/claude-usage-statusline.sh');
+});
+
+test('an already-wired command is still recognised through the ~ form', () => {
+  const result = planSetup({
+    settingsText: JSON.stringify({
+      statusLine: { command: "~/.claude/claude-usage-statusline.sh '~/.claude/mine.sh'" },
+    }),
+    scriptPath: '/Users/lucas/.claude/claude-usage-statusline.sh',
+    homeDir: '/Users/lucas',
+  });
+
+  assert.strictEqual(result.state, 'wired');
+  assert.strictEqual(result.inner, '~/.claude/mine.sh');
+});
