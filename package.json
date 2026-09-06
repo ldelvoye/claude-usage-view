@@ -1,0 +1,74 @@
+{
+  "name": "claude-usage-view",
+  "displayName": "Claude Usage",
+  "description": "Claude Code plan limits as Explorer sidebar bars, with a constant-use pace marker and a projected end-of-window figure.",
+  "version": "0.0.1",
+  "publisher": "ldelvoye",
+  "private": true,
+  "license": "MIT",
+  "keywords": [
+    "claude",
+    "usage",
+    "sidebar",
+    "statusline"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ldelvoye/claude-usage-view.git"
+  },
+  "homepage": "https://github.com/ldelvoye/claude-usage-view#readme",
+  "bugs": {
+    "url": "https://github.com/ldelvoye/claude-usage-view/issues"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "scripts": {
+    "test": "node --test"
+  },
+  "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "id": "claudeUsage.panel",
+          "name": "Claude Usage",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "claudeUsage.showSetup",
+        "title": "Show Setup",
+        "category": "Claude Usage"
+      },
+      {
+        "command": "claudeUsage.refresh",
+        "title": "Refresh",
+        "category": "Claude Usage",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "claudeUsage.refresh",
+          "when": "view == claudeUsage.panel",
+          "group": "navigation"
+        }
+      ]
+    }
+  }
+}
