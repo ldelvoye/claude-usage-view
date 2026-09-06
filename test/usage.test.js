@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { describe } = require('../lib/usage');
+const { describe, describeMany } = require('../lib/usage');
 
 const HOUR = 3600 * 1000;
 const DAY = 24 * HOUR;
@@ -116,6 +116,73 @@ test('plan limits count as available unless explicitly denied', () => {
   assert.strictEqual(absent.available, true, 'the status line omits the flag entirely');
   assert.strictEqual(denied.available, false);
   assert.deepStrictEqual(denied.rows, []);
+});
+
+test('concurrent sessions merge per bucket instead of overwriting each other', () => {
+  // Both shapes observed live on 2026-09-05: an Opus session on 2.1.261
+  // reporting two buckets, and an older Fable session on 2.1.260 reporting only
+  // seven_day, with a staler figure. Alternating writes made the session row
+  // disappear and the weekly figure flip.
+  const opusSession = payload({
+    five_hour: { used_percentage: 58, resets_at: epoch(NOW + 1.2 * HOUR) },
+    seven_day: { used_percentage: 23, resets_at: epoch(NOW + 110 * HOUR) },
+  });
+  const fableSession = payload({
+    seven_day: { used_percentage: 9, resets_at: epoch(NOW + 110 * HOUR) },
+  });
+
+  const merged = describeMany([
+    { payload: opusSession, capturedAt: NOW - 1000 },
+    { payload: fableSession, capturedAt: NOW },
+  ], NOW);
+
+  assert.deepStrictEqual(merged.rows.map((row) => row.label), ['Current session', 'All models']);
+  assert.strictEqual(merged.rows[0].used, 58, 'a session missing a bucket must not erase it');
+  assert.strictEqual(merged.rows[1].used, 23, 'the higher reading is the more current one');
+
+  // Reading the same sessions in the other order must not reorder the panel.
+  const reversed = describeMany([
+    { payload: fableSession, capturedAt: NOW },
+    { payload: opusSession, capturedAt: NOW - 1000 },
+  ], NOW);
+
+  assert.deepStrictEqual(
+    reversed.rows.map((row) => row.label),
+    merged.rows.map((row) => row.label),
+    'row order must not depend on which session was read first',
+  );
+});
+
+test('a newer window beats a higher reading from the window it replaced', () => {
+  const oldWindow = payload({
+    five_hour: { used_percentage: 90, resets_at: epoch(NOW + 0.5 * HOUR) },
+  });
+  const newWindow = payload({
+    five_hour: { used_percentage: 4, resets_at: epoch(NOW + 4.9 * HOUR) },
+  });
+
+  const merged = describeMany([
+    { payload: oldWindow, capturedAt: NOW - 5000 },
+    { payload: newWindow, capturedAt: NOW },
+  ], NOW);
+
+  assert.strictEqual(merged.rows.length, 1);
+  assert.strictEqual(merged.rows[0].used, 4, 'usage resets with the window');
+});
+
+test('one session without plan limits does not blank the panel for the others', () => {
+  const apiKeySession = payload(null, { rate_limits_available: false });
+  const planSession = payload({
+    seven_day: { used_percentage: 23, resets_at: epoch(NOW + 110 * HOUR) },
+  });
+
+  const merged = describeMany([
+    { payload: planSession, capturedAt: NOW - 1000 },
+    { payload: apiKeySession, capturedAt: NOW },
+  ], NOW);
+
+  assert.strictEqual(merged.available, true);
+  assert.strictEqual(merged.rows.length, 1);
 });
 
 test('the captured payload produces usable rows', () => {

@@ -1,17 +1,21 @@
 'use strict';
 
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const vscode = require('vscode');
 
-const { describe } = require('./lib/usage');
+const { describeMany } = require('./lib/usage');
 const { planSetup } = require('./lib/setup');
-const { renderPanel } = require('./lib/render');
+const { renderShell, renderBody } = require('./lib/render');
 
 const REFRESH_MS = 20 * 1000;
+const WATCH_DEBOUNCE_MS = 150;
+const ABANDONED_AFTER_MS = 7 * 24 * 3600 * 1000;
+const MAX_STATE_FILES = 50;
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
-const STATE_FILE = path.join(CLAUDE_DIR, 'claude-usage-state.json');
+const STATE_DIR = path.join(CLAUDE_DIR, 'claude-usage');
 const SCRIPT_FILE = path.join(CLAUDE_DIR, 'claude-usage-statusline.sh');
 const SETTINGS_FILE = path.join(CLAUDE_DIR, 'settings.json');
 
@@ -46,23 +50,75 @@ function installScript(context) {
   }
 }
 
+// One file per status line process. Every live session contributes, because a
+// session reports only the buckets its own process knows about.
 function readState() {
-  let raw;
-  let stat;
+  let names;
   try {
-    raw = fs.readFileSync(STATE_FILE, 'utf8');
-    stat = fs.statSync(STATE_FILE);
+    names = fs.readdirSync(STATE_DIR);
   } catch (err) {
     return null;
   }
 
-  let payload;
-  try {
-    payload = JSON.parse(raw);
-  } catch (err) {
+  const readings = [];
+  for (const name of names) {
+    if (!name.endsWith('.json')) {
+      continue;
+    }
+    try {
+      const full = path.join(STATE_DIR, name);
+      const stat = fs.statSync(full);
+      const payload = JSON.parse(fs.readFileSync(full, 'utf8'));
+      readings.push({ payload, capturedAt: stat.mtimeMs });
+    } catch (err) {
+      continue;
+    }
+  }
+
+  if (readings.length === 0) {
     return null;
   }
-  return describe(payload, stat.mtimeMs, Date.now());
+  return describeMany(readings, Date.now());
+}
+
+// Every session opened leaves a file behind. A reading older than the longest
+// window describes only windows that have since reset, so it can no longer
+// contribute anything; the count cap covers churn faster than that.
+function pruneAbandoned() {
+  let names;
+  try {
+    names = fs.readdirSync(STATE_DIR);
+  } catch (err) {
+    return;
+  }
+
+  const cutoff = Date.now() - ABANDONED_AFTER_MS;
+  const living = [];
+  for (const name of names) {
+    const full = path.join(STATE_DIR, name);
+    try {
+      const modified = fs.statSync(full).mtimeMs;
+      if (modified < cutoff) {
+        fs.unlinkSync(full);
+      } else {
+        living.push({ full, modified });
+      }
+    } catch (err) {
+      continue;
+    }
+  }
+
+  if (living.length <= MAX_STATE_FILES) {
+    return;
+  }
+  living.sort((a, b) => b.modified - a.modified);
+  for (const stale of living.slice(MAX_STATE_FILES)) {
+    try {
+      fs.unlinkSync(stale.full);
+    } catch (err) {
+      continue;
+    }
+  }
 }
 
 class UsagePanel {
@@ -72,18 +128,23 @@ class UsagePanel {
 
   resolveWebviewView(view) {
     this.view = view;
-    view.webview.options = { enableScripts: false };
-    this.refresh();
+    view.webview.options = { enableScripts: true };
+    view.webview.html = renderShell(crypto.randomBytes(16).toString('hex'));
+
+    // The shell announces itself once its listener is attached; a refresh posted
+    // before that would be dropped.
+    view.webview.onDidReceiveMessage(() => this.refresh());
+    view.onDidChangeVisibility(() => this.refresh());
     view.onDidDispose(() => {
       this.view = null;
     });
   }
 
   refresh() {
-    if (!this.view) {
+    if (!this.view || !this.view.visible) {
       return;
     }
-    this.view.webview.html = renderPanel(readState());
+    this.view.webview.postMessage({ html: renderBody(readState(), Date.now()) });
   }
 }
 
@@ -142,19 +203,31 @@ function activate(context) {
 
   // Pace advances on wall-clock time, so the panel redraws even when no new
   // reading arrives.
-  const timer = setInterval(() => panel.refresh(), REFRESH_MS);
+  const timer = setInterval(() => {
+    pruneAbandoned();
+    panel.refresh();
+  }, REFRESH_MS);
   context.subscriptions.push({ dispose: () => clearInterval(timer) });
 
-  // The script replaces the state file by rename, which kills a watch bound to
-  // the old inode. Watch the directory instead.
+  // Several sessions writing at once raise a burst of events, so they are
+  // coalesced into one refresh.
+  let pending = null;
   try {
-    fs.mkdirSync(CLAUDE_DIR, { recursive: true });
-    const watcher = fs.watch(CLAUDE_DIR, (eventType, filename) => {
-      if (filename === path.basename(STATE_FILE)) {
-        panel.refresh();
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    pruneAbandoned();
+    const watcher = fs.watch(STATE_DIR, (eventType, filename) => {
+      if (!filename || !filename.endsWith('.json')) {
+        return;
       }
+      clearTimeout(pending);
+      pending = setTimeout(() => panel.refresh(), WATCH_DEBOUNCE_MS);
     });
-    context.subscriptions.push({ dispose: () => watcher.close() });
+    context.subscriptions.push({
+      dispose: () => {
+        clearTimeout(pending);
+        watcher.close();
+      },
+    });
   } catch (err) {
     // Without a watcher the timer still refreshes, so this is not worth a prompt.
   }
