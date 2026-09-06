@@ -11,7 +11,14 @@ const vscode = require('vscode');
 const { describeMany } = require('./lib/usage');
 const { planSetup } = require('./lib/setup');
 const { payloadFromUsageApi } = require('./lib/usage-api');
-const { initialHealth, noteSuccess, noteFailure, warningFor, emptyReasonFor } = require('./lib/health');
+const {
+  initialHealth,
+  isPending,
+  noteSuccess,
+  noteFailure,
+  warningFor,
+  emptyReasonFor,
+} = require('./lib/health');
 const { renderShell, renderBody } = require('./lib/render');
 
 const REFRESH_MS = 20 * 1000;
@@ -266,7 +273,11 @@ class UsagePanel {
       return;
     }
     refreshFetched(() => this.refresh());
-    const notice = { warning: warningFor(health), emptyReason: emptyReasonFor(health) };
+    const notice = {
+      warning: warningFor(health),
+      emptyReason: emptyReasonFor(health),
+      pending: isPending(health),
+    };
     this.view.webview.postMessage({ html: renderBody(readState(), Date.now(), notice) });
   }
 }
