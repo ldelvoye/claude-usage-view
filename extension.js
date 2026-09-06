@@ -290,19 +290,29 @@ function readSettings() {
   }
 }
 
+// The notification already carries "Source: Claude Usage", so repeating it in the
+// text wastes a line, and absolute home paths wrap over three.
+function shorten(absolutePath) {
+  const home = os.homedir();
+  if (absolutePath.startsWith(home)) {
+    return '~' + absolutePath.slice(home.length);
+  }
+  return absolutePath;
+}
+
 function showSetup() {
-  const plan = planSetup({ settingsText: readSettings(), scriptPath: SCRIPT_FILE });
+  const plan = planSetup({
+    settingsText: readSettings(),
+    scriptPath: SCRIPT_FILE,
+    homeDir: os.homedir(),
+  });
 
   if (plan.state === 'wired') {
-    vscode.window.showInformationMessage(
-      'Claude Usage: already wired, delegating to ' + plan.inner,
-    );
+    vscode.window.showInformationMessage('Already feeding the panel, through ' + shorten(plan.inner));
     return;
   }
   if (plan.state === 'wired-no-inner') {
-    vscode.window.showInformationMessage(
-      'Claude Usage: already wired, with no inner status line set.',
-    );
+    vscode.window.showInformationMessage('Already feeding the panel. No status line of your own is set.');
     return;
   }
 
@@ -312,16 +322,20 @@ function showSetup() {
     2,
   );
 
-  vscode.window
-    .showInformationMessage('Claude Usage: add this to ~/.claude/settings.json', 'Copy')
-    .then((choice) => {
-      if (choice === 'Copy') {
-        vscode.env.clipboard.writeText(block);
-      }
-    });
+  // One surface rather than a toast and a document for the same small block. It
+  // opens as jsonc so the instructions can travel with the thing being copied.
+  const document = [
+    '// Optional. Add this to ~/.claude/settings.json to keep the panel fed when',
+    '// the access token expires, when you are offline, or on a machine without a',
+    '// keychain. Your own status line is preserved as the argument and keeps',
+    '// rendering exactly as it does now.',
+    '',
+    block.replace(/^\{\n|\n\}$/g, '').replace(/^ {2}/gm, ''),
+    '',
+  ].join('\n');
 
   vscode.workspace
-    .openTextDocument({ language: 'json', content: block })
+    .openTextDocument({ language: 'jsonc', content: document })
     .then((doc) => vscode.window.showTextDocument(doc, { preview: true }));
 }
 

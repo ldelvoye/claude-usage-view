@@ -65,7 +65,7 @@ test('a session with no plan is explained, not told to run setup', () => {
 });
 
 test('a platform without a keychain is pointed at the status line instead', () => {
-  assert.match(emptyReasonFor(after(['unsupported'])), /Show Setup/);
+  assert.match(emptyReasonFor(after(['unsupported'])), /Show Status Line Setup/);
 });
 
 test('a real failure gets no empty-state explanation, only a warning', () => {

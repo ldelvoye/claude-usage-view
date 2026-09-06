@@ -13,13 +13,12 @@ Fable                30%
 resets Thu 5:00 AM   on track for 65%
 ```
 
-Each bar carries three things. The solid fill is what you have used. The faint band behind it runs to the point you would be at having spread the window evenly, and the line marks that point so it stays visible once the fill overtakes it. The figure on the right extrapolates your current rate to the reset, which is the number that answers "am I going to run out".
 
 ## Install
 
 Install the `.vsix` and reload. There is nothing to configure.
 
-Limits are read from the same endpoint the `/usage` command uses, authenticated with the Claude Code credential already in your keychain. The extension reads that token and never refreshes or rewrites it: Claude Code owns its lifecycle, and two programs rotating one credential would race.
+Limits are read from the same endpoint the `/usage` command uses, authenticated with the Claude Code credential already in your keychain.
 
 ## What it needs
 
@@ -33,7 +32,7 @@ Not required, and worth doing anyway.
 
 The access token lives about four hours and is refreshed whenever Claude Code runs. Leave the editor open overnight without using Claude Code and it expires, at which point the panel carries on against its cached reading but stops learning anything new. A status line feed keeps a local copy that never expires, works offline, and works without a keychain.
 
-Run **Claude Usage: Show Setup** from the command palette. It reads your current configuration and prints the exact block for your machine. Anything you already have there is preserved as the argument and keeps rendering unchanged:
+Press **⌘⇧P** (**Ctrl+Shift+P** on Windows and Linux) and run **Claude Usage: Show Status Line Setup**. It reads your current configuration and opens the exact block for your machine. Anything you already have there is preserved as the argument and keeps rendering unchanged:
 
 ```json
 "statusLine": {
