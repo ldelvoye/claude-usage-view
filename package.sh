@@ -59,6 +59,7 @@ payload = [
     "lib/usage.js",
     "lib/setup.js",
     "lib/render.js",
+    "lib/health.js",
     "lib/usage-api.js",
 ]
 

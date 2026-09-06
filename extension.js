@@ -11,6 +11,7 @@ const vscode = require('vscode');
 const { describeMany } = require('./lib/usage');
 const { planSetup } = require('./lib/setup');
 const { payloadFromUsageApi } = require('./lib/usage-api');
+const { initialHealth, noteSuccess, noteFailure, warningFor, emptyReasonFor } = require('./lib/health');
 const { renderShell, renderBody } = require('./lib/render');
 
 const REFRESH_MS = 20 * 1000;
@@ -92,6 +93,7 @@ function readState() {
 // Once the token expires it simply stops being updated, and the panel carries on
 // against it with pace still advancing.
 let lastFetchAttempt = 0;
+let health = initialHealth();
 
 function refreshFetched(onDone) {
   // Throttle on the attempt, not the success, or a failing endpoint would be
@@ -100,10 +102,13 @@ function refreshFetched(onDone) {
     return;
   }
   lastFetchAttempt = Date.now();
-  fetchUsage((payload) => {
+  fetchUsage((payload, reason) => {
     if (!payload) {
+      health = noteFailure(health, reason);
+      onDone();
       return;
     }
+    health = noteSuccess();
     try {
       fs.mkdirSync(STATE_DIR, { recursive: true });
       const target = path.join(STATE_DIR, ENDPOINT_FILE);
@@ -163,7 +168,7 @@ function pruneAbandoned() {
 // and one missing row, which is why nothing else depends on this succeeding.
 function readOauthToken(callback) {
   if (process.platform !== 'darwin') {
-    callback(null);
+    callback(null, 'unsupported');
     return;
   }
   execFile(
@@ -172,23 +177,23 @@ function readOauthToken(callback) {
     { encoding: 'utf8', timeout: 5000 },
     (err, stdout) => {
       if (err) {
-        callback(null);
+        callback(null, 'no-token');
         return;
       }
       try {
         const parsed = JSON.parse(stdout);
-        callback(parsed.claudeAiOauth.accessToken || null);
+        callback(parsed.claudeAiOauth.accessToken, null);
       } catch (parseErr) {
-        callback(null);
+        callback(null, 'no-token');
       }
     },
   );
 }
 
 function fetchUsage(callback) {
-  readOauthToken((token) => {
+  readOauthToken((token, reason) => {
     if (!token) {
-      callback(null);
+      callback(null, reason || 'no-token');
       return;
     }
     requestUsage(token, callback);
@@ -210,19 +215,29 @@ function requestUsage(token, callback) {
         body += chunk;
       });
       response.on('end', () => {
-        if (response.statusCode !== 200) {
-          callback(null);
+        if (response.statusCode === 401 || response.statusCode === 403) {
+          callback(null, 'unauthorized');
           return;
         }
-        try {
-          callback(payloadFromUsageApi(JSON.parse(body)));
-        } catch (err) {
-          callback(null);
+        if (response.statusCode !== 200) {
+          callback(null, 'bad-status');
+          return;
         }
+        let payload = null;
+        try {
+          payload = payloadFromUsageApi(JSON.parse(body));
+        } catch (err) {
+          payload = null;
+        }
+        if (!payload) {
+          callback(null, 'unparseable');
+          return;
+        }
+        callback(payload, null);
       });
     },
   );
-  request.on('error', () => callback(null));
+  request.on('error', () => callback(null, 'unreachable'));
   request.on('timeout', () => request.destroy());
   request.end();
 }
@@ -251,7 +266,8 @@ class UsagePanel {
       return;
     }
     refreshFetched(() => this.refresh());
-    this.view.webview.postMessage({ html: renderBody(readState(), Date.now()) });
+    const notice = { warning: warningFor(health), emptyReason: emptyReasonFor(health) };
+    this.view.webview.postMessage({ html: renderBody(readState(), Date.now(), notice) });
   }
 }
 
