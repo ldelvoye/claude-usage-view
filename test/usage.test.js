@@ -76,27 +76,35 @@ test('projection is withheld until a tenth of the window has elapsed', () => {
   assert.strictEqual(result.rows[0].used, 3, 'the bar still renders, only the readout is suppressed');
 });
 
-test('a stale reading freezes pace at capture time instead of letting it advance', () => {
+test('pace keeps advancing on an old reading, growing the headroom it really earned', () => {
   const rateLimits = {
     seven_day: { used_percentage: 17, resets_at: epoch(NOW + 110 * HOUR) },
   };
 
   const atCapture = describe(payload(rateLimits), NOW, NOW);
-  const live = describe(payload(rateLimits), NOW, NOW + 10 * 1000);
-  const stale = describe(payload(rateLimits), NOW, NOW + 2 * DAY);
+  const twelveHoursIdle = describe(payload(rateLimits), NOW, NOW + 12 * HOUR);
 
-  assert.strictEqual(live.stale, false);
-  assert.strictEqual(stale.stale, true);
+  assert.strictEqual(Math.round(atCapture.rows[0].pace), 35);
+  assert.strictEqual(Math.round(twelveHoursIdle.rows[0].pace), 42);
+  assert.strictEqual(twelveHoursIdle.rows[0].used, 17, 'usage is not invented, only pace moves');
+  assert.ok(twelveHoursIdle.rows[0].projection < atCapture.rows[0].projection);
+});
 
-  // While live, pace tracks wall-clock time.
-  assert.ok(live.rows[0].pace > atCapture.rows[0].pace);
+test('a window read past its own reset is reported as expired, not as its old number', () => {
+  const rateLimits = {
+    five_hour: { used_percentage: 46, resets_at: epoch(NOW + 2 * HOUR) },
+    seven_day: { used_percentage: 20, resets_at: epoch(NOW + 110 * HOUR) },
+  };
 
-  // Once stale it stops dead at the capture instant. Two days of drift would
-  // otherwise carry pace from 35% to 63% and make an untouched panel look
-  // steadily healthier.
-  assert.strictEqual(stale.rows[0].pace, atCapture.rows[0].pace);
-  assert.strictEqual(stale.rows[0].projection, atCapture.rows[0].projection);
-  assert.ok(stale.rows[0].pace < 40, 'pace must not advance once the reading is stale');
+  // Idle overnight: the five-hour window has rolled over, the weekly has not.
+  const nextMorning = describe(payload(rateLimits), NOW, NOW + 10 * HOUR);
+  const [session, weekly] = nextMorning.rows;
+
+  assert.strictEqual(session.expired, true);
+  assert.strictEqual(session.used, 0, 'yesterday 46% must not be shown as current');
+  assert.strictEqual(session.projection, null);
+  assert.strictEqual(weekly.expired, false);
+  assert.strictEqual(weekly.used, 20);
 });
 
 test('plan limits count as available unless explicitly denied', () => {
