@@ -1,19 +1,25 @@
 'use strict';
 
 const crypto = require('crypto');
+const { execFile } = require('child_process');
 const fs = require('fs');
+const https = require('https');
 const os = require('os');
 const path = require('path');
 const vscode = require('vscode');
 
 const { describeMany } = require('./lib/usage');
 const { planSetup } = require('./lib/setup');
+const { payloadFromUsageApi } = require('./lib/usage-api');
 const { renderShell, renderBody } = require('./lib/render');
 
 const REFRESH_MS = 20 * 1000;
 const WATCH_DEBOUNCE_MS = 150;
 const ABANDONED_AFTER_MS = 7 * 24 * 3600 * 1000;
 const MAX_STATE_FILES = 50;
+const USAGE_FETCH_TIMEOUT_MS = 5000;
+const USAGE_FETCH_EVERY_MS = 60 * 1000;
+const ENDPOINT_FILE = '_endpoint.json';
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const STATE_DIR = path.join(CLAUDE_DIR, 'claude-usage');
 const SCRIPT_FILE = path.join(CLAUDE_DIR, 'claude-usage-statusline.sh');
@@ -81,6 +87,35 @@ function readState() {
   return describeMany(readings, Date.now());
 }
 
+// The fetched reading is written alongside the session files rather than held in
+// memory, so it survives a reload and is merged by the same rule as the rest.
+// Once the token expires it simply stops being updated, and the panel carries on
+// against it with pace still advancing.
+let lastFetchAttempt = 0;
+
+function refreshFetched(onDone) {
+  // Throttle on the attempt, not the success, or a failing endpoint would be
+  // retried on every redraw.
+  if (Date.now() - lastFetchAttempt < USAGE_FETCH_EVERY_MS) {
+    return;
+  }
+  lastFetchAttempt = Date.now();
+  fetchUsage((payload) => {
+    if (!payload) {
+      return;
+    }
+    try {
+      fs.mkdirSync(STATE_DIR, { recursive: true });
+      const target = path.join(STATE_DIR, ENDPOINT_FILE);
+      fs.writeFileSync(target + '.tmp', JSON.stringify(payload));
+      fs.renameSync(target + '.tmp', target);
+    } catch (err) {
+      return;
+    }
+    onDone();
+  });
+}
+
 // Every session opened leaves a file behind. A reading older than the longest
 // window describes only windows that have since reset, so it can no longer
 // contribute anything; the count cap covers churn faster than that.
@@ -121,6 +156,77 @@ function pruneAbandoned() {
   }
 }
 
+// Proof of concept. The status line envelope carries no per-model buckets, so
+// Fable and friends only exist on the endpoint /usage itself calls. The token is
+// read but never refreshed or written back: Claude Code owns that lifecycle, and
+// two processes rotating one credential would race. A stale token means a 401
+// and one missing row, which is why nothing else depends on this succeeding.
+function readOauthToken(callback) {
+  if (process.platform !== 'darwin') {
+    callback(null);
+    return;
+  }
+  execFile(
+    '/usr/bin/security',
+    ['find-generic-password', '-s', 'Claude Code-credentials', '-w'],
+    { encoding: 'utf8', timeout: 5000 },
+    (err, stdout) => {
+      if (err) {
+        callback(null);
+        return;
+      }
+      try {
+        const parsed = JSON.parse(stdout);
+        callback(parsed.claudeAiOauth.accessToken || null);
+      } catch (parseErr) {
+        callback(null);
+      }
+    },
+  );
+}
+
+function fetchUsage(callback) {
+  readOauthToken((token) => {
+    if (!token) {
+      callback(null);
+      return;
+    }
+    requestUsage(token, callback);
+  });
+}
+
+function requestUsage(token, callback) {
+  const request = https.request(
+    {
+      hostname: 'api.anthropic.com',
+      path: '/api/oauth/usage',
+      method: 'GET',
+      timeout: USAGE_FETCH_TIMEOUT_MS,
+      headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    },
+    (response) => {
+      let body = '';
+      response.on('data', (chunk) => {
+        body += chunk;
+      });
+      response.on('end', () => {
+        if (response.statusCode !== 200) {
+          callback(null);
+          return;
+        }
+        try {
+          callback(payloadFromUsageApi(JSON.parse(body)));
+        } catch (err) {
+          callback(null);
+        }
+      });
+    },
+  );
+  request.on('error', () => callback(null));
+  request.on('timeout', () => request.destroy());
+  request.end();
+}
+
 class UsagePanel {
   constructor() {
     this.view = null;
@@ -144,6 +250,7 @@ class UsagePanel {
     if (!this.view || !this.view.visible) {
       return;
     }
+    refreshFetched(() => this.refresh());
     this.view.webview.postMessage({ html: renderBody(readState(), Date.now()) });
   }
 }

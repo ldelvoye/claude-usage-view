@@ -59,6 +59,7 @@ payload = [
     "lib/usage.js",
     "lib/setup.js",
     "lib/render.js",
+    "lib/usage-api.js",
 ]
 
 missing = [f for f in payload if not (root / f).exists()]

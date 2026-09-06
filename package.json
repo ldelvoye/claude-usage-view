@@ -2,7 +2,7 @@
   "name": "claude-usage-view",
   "displayName": "Claude Usage",
   "description": "Claude Code plan limits as Explorer sidebar bars, with a constant-use pace marker and a projected end-of-window figure.",
-  "version": "0.0.4",
+  "version": "0.0.6",
   "publisher": "ldelvoye",
   "private": true,
   "license": "MIT",
