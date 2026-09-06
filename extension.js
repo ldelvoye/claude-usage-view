@@ -18,6 +18,7 @@ const {
   noteFailure,
   warningFor,
   emptyReasonFor,
+  shouldFetch,
 } = require('./lib/health');
 const { renderShell, renderBody } = require('./lib/render');
 
@@ -26,8 +27,8 @@ const WATCH_DEBOUNCE_MS = 150;
 const ABANDONED_AFTER_MS = 7 * 24 * 3600 * 1000;
 const MAX_STATE_FILES = 50;
 const USAGE_FETCH_TIMEOUT_MS = 5000;
-const USAGE_FETCH_EVERY_MS = 60 * 1000;
 const ENDPOINT_FILE = '_endpoint.json';
+const ATTEMPT_FILE = '_endpoint.attempt';
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const STATE_DIR = path.join(CLAUDE_DIR, 'claude-usage');
 const SCRIPT_FILE = path.join(CLAUDE_DIR, 'claude-usage-statusline.sh');
@@ -99,16 +100,35 @@ function readState() {
 // memory, so it survives a reload and is merged by the same rule as the rest.
 // Once the token expires it simply stops being updated, and the panel carries on
 // against it with pace still advancing.
-let lastFetchAttempt = 0;
 let health = initialHealth();
 
+function ageOf(name) {
+  try {
+    return Date.now() - fs.statSync(path.join(STATE_DIR, name)).mtimeMs;
+  } catch (err) {
+    return Infinity;
+  }
+}
+
 function refreshFetched(onDone) {
-  // Throttle on the attempt, not the success, or a failing endpoint would be
-  // retried on every redraw.
-  if (Date.now() - lastFetchAttempt < USAGE_FETCH_EVERY_MS) {
+  const gate = {
+    attemptAgeMs: ageOf(ATTEMPT_FILE),
+    dataAgeMs: ageOf(ENDPOINT_FILE),
+    health,
+  };
+  if (!shouldFetch(gate)) {
     return;
   }
-  lastFetchAttempt = Date.now();
+
+  // Recorded before the request so the other windows see it whether or not this
+  // one succeeds.
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.writeFileSync(path.join(STATE_DIR, ATTEMPT_FILE), '');
+  } catch (err) {
+    return;
+  }
+
   fetchUsage((payload, reason) => {
     if (!payload) {
       health = noteFailure(health, reason);
@@ -224,6 +244,10 @@ function requestUsage(token, callback) {
       response.on('end', () => {
         if (response.statusCode === 401 || response.statusCode === 403) {
           callback(null, 'unauthorized');
+          return;
+        }
+        if (response.statusCode === 429) {
+          callback(null, 'rate-limited');
           return;
         }
         if (response.statusCode !== 200) {
