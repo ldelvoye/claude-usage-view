@@ -16,9 +16,17 @@ resets Thu 5:00 AM   on track for 65%
 
 ## Install
 
-Install the `.vsix` and reload. There is nothing to configure.
+There is no marketplace listing. Build it yourself:
 
-Limits are read from the same endpoint the `/usage` command uses, authenticated with the Claude Code credential already in your keychain.
+```sh
+git clone https://github.com/ldelvoye/claude-usage-view.git
+cd claude-usage-view
+./package.sh
+```
+
+Then **Extensions → Install from VSIX**, pick the `.vsix` it wrote, and reload the window. There is nothing to configure.
+
+Limits come from the same endpoint the `/usage` command uses, authenticated with the Claude Code credential in your keychain. Worth knowing before you install it: that means the extension reads your OAuth token and calls `api.anthropic.com`. It never refreshes or rewrites the token, Claude Code owns that, and it sends it nowhere else. `lib/usage-api.js` and the `readOauthToken` function in `extension.js` are the whole of it.
 
 ## What it needs
 
