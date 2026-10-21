@@ -30,7 +30,8 @@ case "$input" in
     else
       printf '%s' "$input" > "$STATE.tmp"
     fi
-    if [ -s "$STATE.tmp" ]; then
+    # The panel redraws on every write, and a status line can render every second.
+    if [ -s "$STATE.tmp" ] && ! cmp -s "$STATE.tmp" "$STATE"; then
       mv "$STATE.tmp" "$STATE"
     else
       rm -f "$STATE.tmp"
